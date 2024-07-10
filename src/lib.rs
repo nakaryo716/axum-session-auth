@@ -1,9 +1,9 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, pin::Pin};
 
 use async_trait::async_trait;
 use axum_core::extract::Request;
 use axum_extra::extract::CookieJar;
-use futures::executor::block_on;
+use futures::Future;
 use tower::{Layer, Service};
 
 // Middleware cannot fail
@@ -98,14 +98,14 @@ where
 
 impl<B, S, T, P> Service<Request<B>> for AuthService<S, T, P>
 where
-    S: Service<Request<B>> + Send,
-    P: SessionManage + Send,
-    B: Send,
-    T: Send,
+    S: Service<Request<B>> + Send + Clone + 'static,
+    S::Future: Send + 'static,
+    P: SessionManage + Send + Clone + 'static,
+    B: Send + 'static,
 {
     type Response = S::Response;
     type Error = S::Error;
-    type Future = S::Future;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
 
     fn poll_ready(
         &mut self,
@@ -119,10 +119,17 @@ where
         let jar = CookieJar::from_headers(req.headers());
         let cookie_value = jar.get("foo").map(|cookie| cookie.value().to_owned());
         // query session
-        let query_result = block_on(&mut self.sessions.verify_session());
-
         // add extention mutable
         // call req to routed handler
-        self.inner.call(req)
+
+        let clone = self.inner.clone();
+        let mut cloned_inner = std::mem::replace(&mut self.inner, clone);
+        let cloned_session = self.sessions.clone();
+
+        Box::pin(async move {
+            let query_result = cloned_session.verify_session().await;
+
+            cloned_inner.call(req).await
+        })
     }
 }
