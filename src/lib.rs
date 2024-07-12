@@ -25,83 +25,83 @@ impl<T> UserInfo<T> {
     }
 }
 
-// SessionStore is the database pool where the cookie-value and session_id is kept
-#[derive(Debug, Clone)]
-pub struct SessionStore<P> {
-    pool: P,
-}
-
 #[async_trait]
 pub trait SessionManage: Debug + Clone {
-    async fn add_session(&self);
-    async fn verify_session(&self) -> String;
+    type SessionID;
+    type UserInfo;
+    type Error;
+
+    async fn add_session(&self) -> Result<Self::SessionID, Self::Error>;
+    async fn verify_session(&self, session_id: &str)
+        -> Result<Option<Self::UserInfo>, Self::Error>;
     async fn delete_session(&self);
 }
 
 // ```users_state``` is the database pool where the user's information(user_name, email, password...) is kept
 #[derive(Debug, Clone)]
-pub struct AuthLayer<T, P>
+pub struct AuthLayer<'a, P>
 where
     P: SessionManage,
 {
-    users_state: T,
     sessions: P,
+    session_id_key: &'a str,
 }
 
-impl<T, P> AuthLayer<T, P>
+impl<'a, P> AuthLayer<'a, P>
 where
     P: SessionManage,
 {
-    pub fn new(users_state: T, sessions: P) -> Self {
+    pub fn new(sessions: P, session_id_key: &'a str) -> Self {
         Self {
-            users_state,
             sessions,
+            session_id_key,
         }
     }
 }
 
 // we can use middleware by using axum::routing::Router::layer
-impl<S, T, P> Layer<S> for AuthLayer<T, P>
+impl<'a, S, P> Layer<S> for AuthLayer<'a, P>
 where
-    T: Clone,
     P: SessionManage,
 {
-    type Service = AuthService<S, T, P>;
+    type Service = AuthService<'a, S, P>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        AuthService::new(inner, self.users_state.clone(), self.sessions.clone())
+        AuthService::new(inner, self.sessions.clone(), self.session_id_key)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct AuthService<S, T, P>
+pub struct AuthService<'a, S, P>
 where
     P: SessionManage,
 {
     inner: S,
-    users_state: T,
     sessions: P,
+    session_id_key: &'a str,
 }
 
-impl<S, T, P> AuthService<S, T, P>
+impl<'a, S, P> AuthService<'a, S, P>
 where
     P: SessionManage,
 {
-    fn new(inner: S, users_state: T, sessions: P) -> Self {
+    fn new(inner: S, sessions: P, session_id_key: &'a str) -> Self {
         Self {
             inner,
-            users_state,
             sessions,
+            session_id_key,
         }
     }
 }
 
-impl<B, S, T, P> Service<Request<B>> for AuthService<S, T, P>
+impl<B, S, P> Service<Request<B>> for AuthService<'_, S, P>
 where
+    UserInfo<B>: Clone + Send + Sync + 'static,
+    B: Clone + Send + Sync + 'static,
     S: Service<Request<B>> + Send + Clone + 'static,
     S::Future: Send + 'static,
     P: SessionManage + Send + Clone + 'static,
-    B: Send + 'static,
+    <P as SessionManage>::UserInfo: Clone + Send + Sync + 'static,
 {
     type Response = S::Response;
     type Error = S::Error;
@@ -114,22 +114,45 @@ where
         self.inner.poll_ready(cx)
     }
 
-    fn call(&mut self, req: Request<B>) -> Self::Future {
+    fn call(&mut self, mut req: Request<B>) -> Self::Future {
         // get cookie
         let jar = CookieJar::from_headers(req.headers());
-        let cookie_value = jar.get("foo").map(|cookie| cookie.value().to_owned());
-        // query session
-        // add extention mutable
-        // call req to routed handler
+        let cookie_value = jar
+            .get(self.session_id_key)
+            .map(|cookie| cookie.value().to_owned());
 
         let clone = self.inner.clone();
         let mut cloned_inner = std::mem::replace(&mut self.inner, clone);
         let cloned_session = self.sessions.clone();
 
         Box::pin(async move {
-            let query_result = cloned_session.verify_session().await;
+            let session_id = match cookie_value {
+                Some(session_id) => session_id,
+                None => {
+                    req.extensions_mut().insert(UserInfo(UserState::NoCookie));
+                    return cloned_inner.call(req).await;
+                }
+            };
 
-            cloned_inner.call(req).await
+            let query_result = cloned_session.verify_session(&session_id).await;
+
+            match query_result {
+                Ok(unchecked_session_data) => match unchecked_session_data {
+                    Some(session_data) => {
+                        req.extensions_mut()
+                            .insert(UserInfo(UserState::HaveSession(session_data)));
+                        cloned_inner.call(req).await
+                    }
+                    None => {
+                        req.extensions_mut().insert(UserInfo(UserState::NoSession));
+                        cloned_inner.call(req).await
+                    }
+                },
+                Err(_e) => {
+                    req.extensions_mut().insert(UserInfo(UserState::NoSession));
+                    cloned_inner.call(req).await
+                }
+            }
         })
     }
 }
