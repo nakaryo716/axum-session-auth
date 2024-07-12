@@ -1,10 +1,11 @@
-use std::{fmt::Debug, pin::Pin};
+use std::{fmt::Debug, marker::PhantomData, pin::Pin};
 
 use async_trait::async_trait;
 use axum_core::extract::Request;
 use axum_extra::extract::CookieJar;
 use futures::Future;
-use tower::{Layer, Service};
+use tower::Layer;
+use tower_service::Service;
 
 // Middleware cannot fail
 // Whether there is a session or not is transferred to the handler(axum) side
@@ -17,95 +18,108 @@ pub enum UserState<T> {
 
 // Axum handler can get UserState by using ```Extention```
 #[derive(Debug, Clone)]
-pub struct UserInfo<T>(UserState<T>);
+pub struct UserData<T: Clone>(UserState<T>);
 
-impl<T> UserInfo<T> {
-    pub fn new(user_state: UserState<T>) -> Self {
-        Self(user_state)
+impl<T> UserData<T>
+where
+    T: Clone,
+{
+    pub fn get(&self) -> UserState<T> {
+        self.0.clone()
     }
 }
 
 #[async_trait]
-pub trait SessionManage: Debug + Clone {
-    type SessionID;
-    type UserInfo;
+pub trait SessionManage<T>: Debug + Clone {
+    type SessionID: Clone + Send;
+    type UserInfo: Clone + Send;
     type Error;
 
-    async fn add_session(&self) -> Result<Self::SessionID, Self::Error>;
+    async fn add_session(&self, session_data: T) -> Result<Self::SessionID, Self::Error>;
     async fn verify_session(&self, session_id: &str)
         -> Result<Option<Self::UserInfo>, Self::Error>;
-    async fn delete_session(&self);
+    async fn delete_session(&self, session_id: &str);
 }
 
 // ```users_state``` is the database pool where the user's information(user_name, email, password...) is kept
 #[derive(Debug, Clone)]
-pub struct AuthLayer<'a, P>
+pub struct AuthLayer<'a, P, T>
 where
-    P: SessionManage,
+    P: SessionManage<T>,
 {
     sessions: P,
     session_id_key: &'a str,
+    phantome: PhantomData<T>,
 }
 
-impl<'a, P> AuthLayer<'a, P>
+impl<'a, P, T> AuthLayer<'a, P, T>
 where
-    P: SessionManage,
+    P: SessionManage<T>,
 {
-    pub fn new(sessions: P, session_id_key: &'a str) -> Self {
+    pub fn new(sessions: P, session_id_key: &'a str, phantome: PhantomData<T>) -> Self {
         Self {
             sessions,
             session_id_key,
+            phantome,
         }
     }
 }
 
 // we can use middleware by using axum::routing::Router::layer
-impl<'a, S, P> Layer<S> for AuthLayer<'a, P>
+impl<'a, S, P, T> Layer<S> for AuthLayer<'a, P, T>
 where
-    P: SessionManage,
+    P: SessionManage<T>,
 {
-    type Service = AuthService<'a, S, P>;
+    type Service = AuthService<'a, S, P, T>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        AuthService::new(inner, self.sessions.clone(), self.session_id_key)
+        AuthService::new(
+            inner,
+            self.sessions.clone(),
+            self.session_id_key,
+            self.phantome.clone(),
+        )
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct AuthService<'a, S, P>
+pub struct AuthService<'a, S, P, T>
 where
-    P: SessionManage,
+    P: SessionManage<T>,
 {
     inner: S,
     sessions: P,
     session_id_key: &'a str,
+    phantom: PhantomData<T>,
 }
 
-impl<'a, S, P> AuthService<'a, S, P>
+impl<'a, S, P, T> AuthService<'a, S, P, T>
 where
-    P: SessionManage,
+    P: SessionManage<T>,
 {
-    fn new(inner: S, sessions: P, session_id_key: &'a str) -> Self {
+    fn new(inner: S, sessions: P, session_id_key: &'a str, phantom: PhantomData<T>) -> Self {
         Self {
             inner,
             sessions,
             session_id_key,
+            phantom,
         }
     }
 }
 
-impl<B, S, P> Service<Request<B>> for AuthService<'_, S, P>
+impl<B, S, P, T> Service<Request<B>> for AuthService<'_, S, P, T>
 where
-    UserInfo<B>: Clone + Send + Sync + 'static,
-    B: Clone + Send + Sync + 'static,
+    B: Send + 'static,
     S: Service<Request<B>> + Send + Clone + 'static,
     S::Future: Send + 'static,
-    P: SessionManage + Send + Clone + 'static,
-    <P as SessionManage>::UserInfo: Clone + Send + Sync + 'static,
+    P: SessionManage<T> + Send + Clone + 'static,
+    T: Clone + Send + Sync + 'static,
+    <P as SessionManage<T>>::UserInfo: Clone + Send + Sync + 'static,
+    <P as SessionManage<T>>::Error: std::marker::Send,
 {
     type Response = S::Response;
     type Error = S::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
     fn poll_ready(
         &mut self,
@@ -129,7 +143,9 @@ where
             let session_id = match cookie_value {
                 Some(session_id) => session_id,
                 None => {
-                    req.extensions_mut().insert(UserInfo(UserState::NoCookie));
+                    req.extensions_mut()
+                        .insert(UserData(UserState::<T>::NoCookie));
+                    println!("calle cookie err");
                     return cloned_inner.call(req).await;
                 }
             };
@@ -140,17 +156,22 @@ where
                 Ok(unchecked_session_data) => match unchecked_session_data {
                     Some(session_data) => {
                         req.extensions_mut()
-                            .insert(UserInfo(UserState::HaveSession(session_data)));
-                        cloned_inner.call(req).await
+                            .insert(UserData(UserState::HaveSession(session_data)));
+                        println!("calle some");
+                        return cloned_inner.call(req).await;
                     }
                     None => {
-                        req.extensions_mut().insert(UserInfo(UserState::NoSession));
-                        cloned_inner.call(req).await
+                        req.extensions_mut()
+                            .insert(UserData(UserState::<T>::NoSession));
+                        println!("calle none");
+                        return cloned_inner.call(req).await;
                     }
                 },
                 Err(_e) => {
-                    req.extensions_mut().insert(UserInfo(UserState::NoSession));
-                    cloned_inner.call(req).await
+                    req.extensions_mut()
+                        .insert(UserData(UserState::<T>::NoSession));
+                    println!("calle err");
+                    return cloned_inner.call(req).await;
                 }
             }
         })
