@@ -7,5 +7,16 @@ edition = "2021"
 async-trait = "0.1.81"
 axum-core = "0.4.3"
 axum-extra = { version = "0.9.3", features = ["cookie"] }
-futures = "0.3.30"
 tower = "0.4.13"
+tower-service = "0.3.2"
+
+[[example]]
+name = "auth-mid"
+
+[dev-dependencies]
+axum = "0.7.5"
+tokio ={ version = "1.38.0", features = ["full"]}
+axum-session-auth ={ path = "../axum-session-auth"}
+thiserror = "*"
+async-trait = "*"
+uuid ={ version = "*", features = ["v4"]}
