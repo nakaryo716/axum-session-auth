@@ -42,7 +42,7 @@ pub trait SessionManage<T>: Debug + Clone {
 
 // ```users_state``` is the database pool where the user's information(user_name, email, password...) is kept
 #[derive(Debug, Clone)]
-pub struct AuthLayer<'a, P, T>
+pub struct SessionManagerLayer<'a, P, T>
 where
     P: SessionManage<T>,
 {
@@ -51,7 +51,7 @@ where
     phantome: PhantomData<T>,
 }
 
-impl<'a, P, T> AuthLayer<'a, P, T>
+impl<'a, P, T> SessionManagerLayer<'a, P, T>
 where
     P: SessionManage<T>,
 {
@@ -65,7 +65,7 @@ where
 }
 
 // we can use middleware by using axum::routing::Router::layer
-impl<'a, S, P, T> Layer<S> for AuthLayer<'a, P, T>
+impl<'a, S, P, T> Layer<S> for SessionManagerLayer<'a, P, T>
 where
     P: SessionManage<T>,
 {
