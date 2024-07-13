@@ -69,10 +69,10 @@ impl<'a, S, P, T> Layer<S> for SessionManagerLayer<'a, P, T>
 where
     P: SessionManage<T>,
 {
-    type Service = AuthService<'a, S, P, T>;
+    type Service = SessionManagerService<'a, S, P, T>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        AuthService::new(
+        SessionManagerService::new(
             inner,
             self.sessions.clone(),
             self.session_id_key,
@@ -82,7 +82,7 @@ where
 }
 
 #[derive(Debug, Clone)]
-pub struct AuthService<'a, S, P, T>
+pub struct SessionManagerService<'a, S, P, T>
 where
     P: SessionManage<T>,
 {
@@ -92,7 +92,7 @@ where
     phantom: PhantomData<T>,
 }
 
-impl<'a, S, P, T> AuthService<'a, S, P, T>
+impl<'a, S, P, T> SessionManagerService<'a, S, P, T>
 where
     P: SessionManage<T>,
 {
@@ -106,7 +106,7 @@ where
     }
 }
 
-impl<B, S, P, T> Service<Request<B>> for AuthService<'_, S, P, T>
+impl<B, S, P, T> Service<Request<B>> for SessionManagerService<'_, S, P, T>
 where
     B: Send + 'static,
     S: Service<Request<B>> + Send + Clone + 'static,
