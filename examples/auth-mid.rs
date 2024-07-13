@@ -6,7 +6,7 @@ use std::{
 };
 
 use axum::{async_trait, response::IntoResponse, routing::get, Extension, Router};
-use axum_session_auth::{AuthLayer, SessionManage, UserData, UserState};
+use axum_session_manager::{SessionManagerLayer, SessionManage, UserData, UserState};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -23,7 +23,7 @@ async fn main() {
 fn app() -> Router {
     let session_pool = SessionPool::new();
     let phantom = PhantomData::default();
-    let layer = AuthLayer::new(session_pool, "test-id", phantom);
+    let layer = SessionManagerLayer::new(session_pool, "test-id", phantom);
 
     Router::new()
         .route("/", get(root))
