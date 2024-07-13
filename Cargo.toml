@@ -1,5 +1,5 @@
 [package]
-name = "axum-session-auth"
+name = "axum-session-manager"
 version = "0.1.0"
 edition = "2021"
 
@@ -16,7 +16,7 @@ name = "auth-mid"
 [dev-dependencies]
 axum = "0.7.5"
 tokio ={ version = "1.38.0", features = ["full"]}
-axum-session-auth ={ path = "../axum-session-auth"}
+axum-session-manager ={ path = "../axum-session-manager"}
 thiserror = "*"
 async-trait = "*"
 uuid ={ version = "*", features = ["v4"]}
