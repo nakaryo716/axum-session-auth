@@ -1,9 +1,8 @@
-use std::{fmt::Debug, marker::PhantomData, pin::Pin};
+use std::{fmt::Debug, future::Future, marker::PhantomData, pin::Pin};
 
 use async_trait::async_trait;
 use axum_core::extract::Request;
 use axum_extra::extract::CookieJar;
-use futures::Future;
 use tower::Layer;
 use tower_service::Service;
 
