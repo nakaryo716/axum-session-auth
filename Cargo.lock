@@ -113,14 +113,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "axum-session-auth"
+name = "axum-session-manager"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
  "axum-core",
  "axum-extra",
- "axum-session-auth",
+ "axum-session-manager",
  "thiserror",
  "tokio",
  "tower",
