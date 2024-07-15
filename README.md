@@ -64,7 +64,7 @@ impl SessionManage<Credential> for SessionPool {
 The method of get session data(user-data) at axum::handler is use ```axum::Extention<T>```
 ```rust
 async fn handler(Extension(user_data): Extension<UserData<Credential>>) -> impl IntoResponse {
-    let try_session = user_data.get();
+    let try_session = user_data.0;
     match try_session {
         UserState::HaveSession(a) => {
           // do some task by using user-data
