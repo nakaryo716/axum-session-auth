@@ -118,9 +118,10 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
- "axum-core",
  "axum-extra",
  "axum-session-manager",
+ "http",
+ "serde",
  "thiserror",
  "tokio",
  "tower",
