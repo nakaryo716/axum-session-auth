@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    error,
     fmt::Debug,
     marker::PhantomData,
     sync::{Arc, RwLock},
@@ -48,14 +47,14 @@ async fn root() -> impl IntoResponse {
     "Hello"
 }
 
-async fn get_session_data(Extension(user_data): Extension<UserData<Credential>>) -> Result<impl IntoResponse, impl IntoResponse>{
+async fn get_session_data(
+    Extension(user_data): Extension<UserData<Credential>>,
+) -> Result<impl IntoResponse, impl IntoResponse> {
     let user_state = user_data.0;
     match user_state {
-        UserState::HaveSession(a) => {
-            Ok((StatusCode::OK, Json(a)))
-        },
-        UserState::NoCookie => Err((StatusCode::UNAUTHORIZED,"no cookie")),
-        UserState::NoSession => Err((StatusCode::UNAUTHORIZED,"you need login")),
+        UserState::HaveSession(a) => Ok((StatusCode::OK, Json(a))),
+        UserState::NoCookie => Err((StatusCode::UNAUTHORIZED, "no cookie")),
+        UserState::NoSession => Err((StatusCode::UNAUTHORIZED, "you need login")),
     }
 }
 
@@ -134,7 +133,7 @@ impl SessionManage<Credential> for SessionPool {
         &self,
         session_id: &str,
     ) -> Result<Option<Self::UserInfo>, Self::Error> {
-        let data = self.pool.read().map_err(|_e| ServerError::Unexpect)?;
+        let data = self.pool.read().map_err(|_e| ServerError::Unexpect)?.to_owned();
 
         match data.get(session_id) {
             Some(user) => {
@@ -145,7 +144,11 @@ impl SessionManage<Credential> for SessionPool {
         }
     }
 
-    async fn delete_session(&self, session_id: &str) {
-        self.pool.write().unwrap().remove(session_id);
+    async fn delete_session(&self, session_id: &str) -> Result<(), Self::Error> {
+        self.pool
+            .write()
+            .map_err(|_e| ServerError::Unexpect)?
+            .remove(session_id);
+        Ok(())
     }
 }
