@@ -21,5 +21,5 @@ pub trait SessionManage<T>: Debug + Clone {
     async fn add_session(&self, session_data: T) -> Result<Self::SessionID, Self::Error>;
     async fn verify_session(&self, session_id: &str)
         -> Result<Option<Self::UserInfo>, Self::Error>;
-    async fn delete_session(&self, session_id: &str);
+    async fn delete_session(&self, session_id: &str) -> Result<(), Self::Error>;
 }
