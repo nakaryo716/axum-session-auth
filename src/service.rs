@@ -113,21 +113,21 @@ mod test {
         body::Body, extract::State, response::IntoResponse, routing::{get, post}, Extension, Json, Router
     };
     use axum_extra::extract::{cookie::Cookie, CookieJar};
-    use http::{Request, StatusCode};
+    use http::{header::{ACCESS_CONTROL_ALLOW_CREDENTIALS, CONTENT_TYPE, COOKIE, SET_COOKIE}, Request, StatusCode};
     use serde::{Deserialize, Serialize};
     use thiserror::Error;
     use tower::ServiceExt;
 
     use crate::{SessionManage, SessionManagerLayer, UserData, UserState};
 
-    #[derive(Debug, Clone, Deserialize)]
+    #[derive(Debug, Clone, Deserialize, Serialize)]
     struct Credential {
         name: String,
         mail: String,
         pass: String,
     }
 
-    #[derive(Debug, Clone, Serialize)]
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
     struct SessionUserData {
         name: String,
         mail: String,
@@ -254,14 +254,50 @@ mod test {
             .unwrap();
 
         let res = app.oneshot(req).await.unwrap();
-
-        println!("{:?}", res);
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
-
+        
         let byte = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap().to_vec();
         let body = String::from_utf8(byte).unwrap();
-
         assert_eq!(body, "no cookie");
+    }
+
+    #[tokio::test]
+    async fn have_session() {
+        let app = router();
+        let json_value = Credential {
+            name: "test-name".to_string(),
+            mail: "test-gmail".to_string(),
+            pass: "test-pass".to_string(),
+        };
+
+        let req_body = serde_json::to_string(&json_value).unwrap();
+
+        let login_req = Request::builder()
+            .uri("/login")
+            .method("POST")
+            .header(CONTENT_TYPE, "application/json")
+            .body(req_body)
+            .unwrap();
+
+        let login_res = app.clone().oneshot(login_req).await.unwrap();
+        assert_eq!(login_res.status(), StatusCode::OK);
+
+        let verify_req = Request::builder()
+        .uri("/user_data")
+        .header(ACCESS_CONTROL_ALLOW_CREDENTIALS, "true")
+        .header(COOKIE, login_res.headers().get(SET_COOKIE).unwrap())
+        .body(Body::empty())
+        .unwrap();
+        
+        let verify_res = app.oneshot(verify_req).await.unwrap();
+        assert_eq!(verify_res.status(), StatusCode::OK);
+
+        let byte = axum::body::to_bytes(verify_res.into_body(), usize::MAX).await.unwrap().to_vec();
+        let body = String::from_utf8(byte).unwrap();
+        let des_body: SessionUserData = serde_json::from_str(&body).unwrap();
+        
+        let collect_body = SessionUserData::new(json_value);
+        assert_eq!(des_body, collect_body);
     }
 }
 
