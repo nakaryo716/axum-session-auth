@@ -122,6 +122,7 @@ dependencies = [
  "axum-session-manager",
  "http",
  "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "tower",
