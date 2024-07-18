@@ -67,8 +67,9 @@ where
             let session_id = match cookie_value {
                 Some(session_id) => session_id,
                 None => {
+                    let val: UserData<<P as SessionManage<T>>::UserInfo> = UserData(UserState::NoCookie);
                     req.extensions_mut()
-                        .insert(UserData(UserState::<T>::NoCookie));
+                        .insert(val);
                     return cloned_inner.call(req).await;
                 }
             };
