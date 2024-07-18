@@ -99,3 +99,169 @@ where
         })
     }
 }
+
+#[cfg(test)]
+mod test {
+    use std::{
+        collections::HashMap,
+        marker::PhantomData,
+        sync::{Arc, Mutex},
+    };
+
+    use async_trait::async_trait;
+    use axum::{
+        body::Body, extract::State, response::IntoResponse, routing::{get, post}, Extension, Json, Router
+    };
+    use axum_extra::extract::{cookie::Cookie, CookieJar};
+    use http::{Request, StatusCode};
+    use serde::{Deserialize, Serialize};
+    use thiserror::Error;
+    use tower::ServiceExt;
+
+    use crate::{SessionManage, SessionManagerLayer, UserData, UserState};
+
+    #[derive(Debug, Clone, Deserialize)]
+    struct Credential {
+        name: String,
+        mail: String,
+        pass: String,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    struct SessionUserData {
+        name: String,
+        mail: String,
+    }
+
+    impl SessionUserData {
+        fn new(payload: Credential) -> Self {
+            Self {
+                name: payload.name,
+                mail: payload.mail,
+            }
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct MockSessionPool {
+        pool: Arc<Mutex<HashMap<String, SessionUserData>>>,
+    }
+
+    impl MockSessionPool {
+        fn new() -> Self {
+            Self {
+                pool: Arc::default(),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Error)]
+    enum ServerError {
+        #[error("unexpeted error")]
+        Unexpect,
+    }
+
+    #[async_trait]
+    impl SessionManage<Credential> for MockSessionPool {
+        type SessionID = String;
+        type UserInfo = SessionUserData;
+        type Error = ServerError;
+
+        async fn add_session(
+            &self,
+            session_data: Credential,
+        ) -> Result<Self::SessionID, Self::Error> {
+            let session_id = uuid::Uuid::new_v4().to_string();
+            let session_user_data = SessionUserData::new(session_data);
+
+            self.pool
+                .lock()
+                .map_err(|_e| ServerError::Unexpect)?
+                .insert(session_id.clone(), session_user_data);
+            Ok(session_id)
+        }
+
+        async fn verify_session(
+            &self,
+            session_id: &str,
+        ) -> Result<Option<Self::UserInfo>, Self::Error> {
+            let data = self
+                .pool
+                .lock()
+                .map_err(|_e| ServerError::Unexpect)?
+                .get(session_id)
+                .map(|e| e.to_owned());
+            let data = data.clone();
+            Ok(data)
+        }
+
+        async fn delete_session(&self, session_id: &str) -> Result<(), Self::Error> {
+            self.pool
+                .lock()
+                .map_err(|_e| ServerError::Unexpect)?
+                .remove(session_id);
+            Ok(())
+        }
+    }
+
+    fn router() -> Router {
+        let sessions = MockSessionPool::new();
+        let phantome = PhantomData::default();
+        let layer = SessionManagerLayer::new(sessions.clone(), "session-key", phantome);
+
+        Router::new()
+            .route("/", get(index))
+            .route("/login", post(login))
+            .route("/user_data", get(user_data))
+            .layer(layer)
+            .with_state(sessions)
+    }
+
+    async fn login(
+        jar: CookieJar,
+        State(pool): State<MockSessionPool>,
+        Json(payload): Json<Credential>,
+    ) -> Result<impl IntoResponse, StatusCode> {
+        let session_id = pool
+            .add_session(payload)
+            .await
+            .map_err(|_e| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        let cookie = Cookie::new("session-key", session_id);
+        Ok((StatusCode::OK, jar.add(cookie)))
+    }
+
+    async fn index() -> impl IntoResponse {
+        "Hello"
+    }
+
+    async fn user_data(
+        Extension(user_data): Extension<UserData<SessionUserData>>,
+    ) -> Result<impl IntoResponse, impl IntoResponse> {
+        match user_data.0 {
+            UserState::HaveSession(data) =>  Ok((StatusCode::OK, Json(data))),
+            UserState::NoCookie => Err((StatusCode::UNAUTHORIZED, "no cookie")),
+            UserState::NoSession => Err((StatusCode::UNAUTHORIZED, "no session"))
+        }
+    }
+
+    #[tokio::test]
+    async fn no_cookie() {
+        let app = router();
+        let req = Request::builder()
+            .uri("/user_data")
+            .body(Body::empty())
+            .unwrap();
+
+        let res = app.oneshot(req).await.unwrap();
+
+        println!("{:?}", res);
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+        let byte = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap().to_vec();
+        let body = String::from_utf8(byte).unwrap();
+
+        assert_eq!(body, "no cookie");
+    }
+}
+
