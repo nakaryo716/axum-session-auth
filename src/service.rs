@@ -74,7 +74,6 @@ where
             };
 
             let query_result = cloned_session.verify_session(&session_id).await;
-
             match query_result {
                 Ok(unchecked_session_data) => match unchecked_session_data {
                     Some(session_data) => {
@@ -83,14 +82,16 @@ where
                         return cloned_inner.call(req).await;
                     }
                     None => {
+                        let val: UserData<<P as SessionManage<T>>::UserInfo> = UserData(UserState::NoSession);
                         req.extensions_mut()
-                            .insert(UserData(UserState::<T>::NoSession));
+                            .insert(val);
                         return cloned_inner.call(req).await;
                     }
                 },
                 Err(_e) => {
+                    let val: UserData<<P as SessionManage<T>>::UserInfo> = UserData(UserState::NoSession);
                     req.extensions_mut()
-                        .insert(UserData(UserState::<T>::NoSession));
+                        .insert(val);
                     return cloned_inner.call(req).await;
                 }
             }
