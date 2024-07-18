@@ -82,16 +82,16 @@ where
                         return cloned_inner.call(req).await;
                     }
                     None => {
-                        let val: UserData<<P as SessionManage<T>>::UserInfo> = UserData(UserState::NoSession);
-                        req.extensions_mut()
-                            .insert(val);
+                        let val: UserData<<P as SessionManage<T>>::UserInfo> =
+                            UserData(UserState::NoSession);
+                        req.extensions_mut().insert(val);
                         return cloned_inner.call(req).await;
                     }
                 },
                 Err(_e) => {
-                    let val: UserData<<P as SessionManage<T>>::UserInfo> = UserData(UserState::NoSession);
-                    req.extensions_mut()
-                        .insert(val);
+                    let val: UserData<<P as SessionManage<T>>::UserInfo> =
+                        UserData(UserState::NoSession);
+                    req.extensions_mut().insert(val);
                     return cloned_inner.call(req).await;
                 }
             }
