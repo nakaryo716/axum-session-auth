@@ -67,9 +67,9 @@ where
             let session_id = match cookie_value {
                 Some(session_id) => session_id,
                 None => {
-                    let val: UserData<<P as SessionManage<T>>::UserInfo> = UserData(UserState::NoCookie);
-                    req.extensions_mut()
-                        .insert(val);
+                    let val: UserData<<P as SessionManage<T>>::UserInfo> =
+                        UserData(UserState::NoCookie);
+                    req.extensions_mut().insert(val);
                     return cloned_inner.call(req).await;
                 }
             };
@@ -110,15 +110,131 @@ mod test {
 
     use async_trait::async_trait;
     use axum::{
-        body::Body, extract::State, response::IntoResponse, routing::{delete, get, post}, Extension, Json, Router
+        body::Body,
+        extract::State,
+        response::IntoResponse,
+        routing::{delete, get, post},
+        Extension, Json, Router,
     };
     use axum_extra::extract::{cookie::Cookie, CookieJar};
-    use http::{header::{ACCESS_CONTROL_ALLOW_CREDENTIALS, CONTENT_TYPE, COOKIE, SET_COOKIE}, Request, StatusCode};
+    use http::{
+        header::{ACCESS_CONTROL_ALLOW_CREDENTIALS, CONTENT_TYPE, COOKIE, SET_COOKIE},
+        Request, StatusCode,
+    };
     use serde::{Deserialize, Serialize};
     use thiserror::Error;
     use tower::ServiceExt;
 
     use crate::{SessionManage, SessionManagerLayer, UserData, UserState};
+
+    #[tokio::test]
+    async fn no_cookie() {
+        let app = router();
+        let req = Request::builder()
+            .uri("/user_data")
+            .body(Body::empty())
+            .unwrap();
+
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+        let byte = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec();
+        let body = String::from_utf8(byte).unwrap();
+        assert_eq!(body, "no cookie");
+    }
+
+    #[tokio::test]
+    async fn no_session() {
+        let app = router();
+        let json_value = Credential {
+            name: "test-name".to_string(),
+            mail: "test-gmail".to_string(),
+            pass: "test-pass".to_string(),
+        };
+        let req_body = serde_json::to_string(&json_value).unwrap();
+
+        let login_req = Request::builder()
+            .uri("/login")
+            .method("POST")
+            .header(CONTENT_TYPE, "application/json")
+            .body(req_body)
+            .unwrap();
+
+        let login_res = app.clone().oneshot(login_req).await.unwrap();
+        assert_eq!(login_res.status(), StatusCode::OK);
+
+        let delete_req = Request::builder()
+            .method("DELETE")
+            .header(COOKIE, login_res.headers().get(SET_COOKIE).unwrap())
+            .uri("/delete")
+            .body(Body::empty())
+            .unwrap();
+
+        let delete_res = app.clone().oneshot(delete_req).await.unwrap();
+        assert_eq!(delete_res.status(), StatusCode::OK);
+
+        let verify_req = Request::builder()
+            .uri("/user_data")
+            .header(ACCESS_CONTROL_ALLOW_CREDENTIALS, "true")
+            .header(COOKIE, login_res.headers().get(SET_COOKIE).unwrap())
+            .body(Body::empty())
+            .unwrap();
+
+        let verify_res = app.oneshot(verify_req).await.unwrap();
+        assert_eq!(verify_res.status(), StatusCode::UNAUTHORIZED);
+
+        let byte = axum::body::to_bytes(verify_res.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec();
+        let body = String::from_utf8(byte).unwrap();
+        assert_eq!(body, "no session");
+    }
+
+    #[tokio::test]
+    async fn have_session() {
+        let app = router();
+        let json_value = Credential {
+            name: "test-name".to_string(),
+            mail: "test-gmail".to_string(),
+            pass: "test-pass".to_string(),
+        };
+
+        let req_body = serde_json::to_string(&json_value).unwrap();
+
+        let login_req = Request::builder()
+            .uri("/login")
+            .method("POST")
+            .header(CONTENT_TYPE, "application/json")
+            .body(req_body)
+            .unwrap();
+
+        let login_res = app.clone().oneshot(login_req).await.unwrap();
+        assert_eq!(login_res.status(), StatusCode::OK);
+
+        let verify_req = Request::builder()
+            .uri("/user_data")
+            .header(ACCESS_CONTROL_ALLOW_CREDENTIALS, "true")
+            .header(COOKIE, login_res.headers().get(SET_COOKIE).unwrap())
+            .body(Body::empty())
+            .unwrap();
+
+        let verify_res = app.oneshot(verify_req).await.unwrap();
+        assert_eq!(verify_res.status(), StatusCode::OK);
+
+        let byte = axum::body::to_bytes(verify_res.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec();
+        let body = String::from_utf8(byte).unwrap();
+        let des_body: SessionUserData = serde_json::from_str(&body).unwrap();
+
+        let collect_body = SessionUserData::new(json_value);
+        assert_eq!(des_body, collect_body);
+    }
 
     #[derive(Debug, Clone, Deserialize, Serialize)]
     struct Credential {
@@ -160,7 +276,7 @@ mod test {
         #[error("unexpeted error")]
         Unexpect,
     }
-
+    
     #[async_trait]
     impl SessionManage<Credential> for MockSessionPool {
         type SessionID = String;
@@ -196,15 +312,15 @@ mod test {
         }
 
         async fn delete_session(&self, session_id: &str) -> Result<(), Self::Error> {
-            let mut text = session_id.to_string();
+            let mut id = session_id.to_string();
             for _i in 0..12 {
-                text.remove(0);
+                id.remove(0);
             }
 
             self.pool
                 .lock()
                 .map_err(|_e| ServerError::Unexpect)?
-                .remove(&text);
+                .remove(&id);
 
             Ok(())
         }
@@ -216,7 +332,6 @@ mod test {
         let layer = SessionManagerLayer::new(sessions.clone(), "session-key", phantome);
 
         Router::new()
-            .route("/", get(index))
             .route("/login", post(login))
             .route("/user_data", get(user_data))
             .route("/delete", delete(delete_session))
@@ -238,17 +353,13 @@ mod test {
         Ok((StatusCode::OK, jar.add(cookie)))
     }
 
-    async fn index() -> impl IntoResponse {
-        "Hello"
-    }
-
     async fn user_data(
         Extension(user_data): Extension<UserData<SessionUserData>>,
     ) -> Result<impl IntoResponse, impl IntoResponse> {
         match user_data.0 {
-            UserState::HaveSession(data) =>  Ok((StatusCode::OK, Json(data))),
+            UserState::HaveSession(data) => Ok((StatusCode::OK, Json(data))),
             UserState::NoCookie => Err((StatusCode::UNAUTHORIZED, "no cookie")),
-            UserState::NoSession => Err((StatusCode::UNAUTHORIZED, "no session"))
+            UserState::NoSession => Err((StatusCode::UNAUTHORIZED, "no session")),
         }
     }
 
@@ -256,110 +367,15 @@ mod test {
         jar: CookieJar,
         State(pool): State<MockSessionPool>,
     ) -> Result<impl IntoResponse, StatusCode> {
-        let session_id = jar.get("session-key").map(|cookie| cookie.to_owned()).unwrap().to_string();
+        let session_id = jar
+            .get("session-key")
+            .map(|cookie| cookie.to_owned())
+            .unwrap()
+            .to_string();
 
-        pool.delete_session(&session_id).await.map_err(|_e| StatusCode::INTERNAL_SERVER_ERROR)?;
+        pool.delete_session(&session_id)
+            .await
+            .map_err(|_e| StatusCode::INTERNAL_SERVER_ERROR)?;
         Ok(StatusCode::OK)
     }
-
-    #[tokio::test]
-    async fn no_cookie() {
-        let app = router();
-        let req = Request::builder()
-            .uri("/user_data")
-            .body(Body::empty())
-            .unwrap();
-
-        let res = app.oneshot(req).await.unwrap();
-        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
-        
-        let byte = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap().to_vec();
-        let body = String::from_utf8(byte).unwrap();
-        assert_eq!(body, "no cookie");
-    }
-
-    #[tokio::test]
-    async fn have_session() {
-        let app = router();
-        let json_value = Credential {
-            name: "test-name".to_string(),
-            mail: "test-gmail".to_string(),
-            pass: "test-pass".to_string(),
-        };
-
-        let req_body = serde_json::to_string(&json_value).unwrap();
-
-        let login_req = Request::builder()
-            .uri("/login")
-            .method("POST")
-            .header(CONTENT_TYPE, "application/json")
-            .body(req_body)
-            .unwrap();
-
-        let login_res = app.clone().oneshot(login_req).await.unwrap();
-        assert_eq!(login_res.status(), StatusCode::OK);
-
-        let verify_req = Request::builder()
-        .uri("/user_data")
-        .header(ACCESS_CONTROL_ALLOW_CREDENTIALS, "true")
-        .header(COOKIE, login_res.headers().get(SET_COOKIE).unwrap())
-        .body(Body::empty())
-        .unwrap();
-        
-        let verify_res = app.oneshot(verify_req).await.unwrap();
-        assert_eq!(verify_res.status(), StatusCode::OK);
-
-        let byte = axum::body::to_bytes(verify_res.into_body(), usize::MAX).await.unwrap().to_vec();
-        let body = String::from_utf8(byte).unwrap();
-        let des_body: SessionUserData = serde_json::from_str(&body).unwrap();
-
-        let collect_body = SessionUserData::new(json_value);
-        assert_eq!(des_body, collect_body);
-    }
-
-    #[tokio::test]
-    async fn no_session() {
-        let app = router();
-        let json_value = Credential {
-            name: "test-name".to_string(),
-            mail: "test-gmail".to_string(),
-            pass: "test-pass".to_string(),
-        };
-        let req_body = serde_json::to_string(&json_value).unwrap();
-
-        let login_req = Request::builder()
-            .uri("/login")
-            .method("POST")
-            .header(CONTENT_TYPE, "application/json")
-            .body(req_body)
-            .unwrap();
-
-        let login_res = app.clone().oneshot(login_req).await.unwrap();
-        assert_eq!(login_res.status(), StatusCode::OK);
-
-        let delete_req = Request::builder()
-        .method("DELETE")
-        .header(COOKIE, login_res.headers().get(SET_COOKIE).unwrap())
-        .uri("/delete")
-        .body(Body::empty())
-        .unwrap();
-
-        let delete_res = app.clone().oneshot(delete_req).await.unwrap();
-        assert_eq!(delete_res.status(), StatusCode::OK);
-
-        let verify_req = Request::builder()
-        .uri("/user_data")
-        .header(ACCESS_CONTROL_ALLOW_CREDENTIALS, "true")
-        .header(COOKIE, login_res.headers().get(SET_COOKIE).unwrap())
-        .body(Body::empty())
-        .unwrap();
-    
-        let verify_res = app.oneshot(verify_req).await.unwrap();
-        assert_eq!(verify_res.status(), StatusCode::UNAUTHORIZED);
-
-        let byte = axum::body::to_bytes(verify_res.into_body(), usize::MAX).await.unwrap().to_vec();
-        let body = String::from_utf8(byte).unwrap();
-        assert_eq!(body, "no session");
-    }
 }
-
