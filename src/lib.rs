@@ -13,4 +13,4 @@ pub use manager::{SessionManage, UserData, UserState};
 
 pub mod layer;
 pub mod manager;
-pub mod service;
+mod service;
