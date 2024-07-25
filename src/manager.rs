@@ -15,7 +15,8 @@ pub enum UserState<T> {
 #[derive(Debug, Clone)]
 pub struct UserData<T: Clone>(pub UserState<T>);
 
-/// This trait enable SessionManagerService to verify session using ```verify_session``` method
+/// Traits that implement session creation, confirmation, and deletion logic.  
+/// This trait enable SessionManagerService to verify session automatically using ```verify_session``` method.  
 #[async_trait]
 pub trait SessionManage<T>: Debug + Clone {
     type SessionID: Clone + Send;
